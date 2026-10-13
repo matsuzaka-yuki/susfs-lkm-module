@@ -12,10 +12,18 @@ LOCK = json.loads((ROOT / "upstream.lock.json").read_text())
 # Packaged KMIs -> a sample real kernel release that must select them.
 KMIS = {f"{kmi.split('-', 1)[1]}.0-{kmi.split('-', 1)[0]}-1-test": kmi
         for kmi in LOCK["supported_kmis"]}
-# (os, kver) pairs upstream does not ship: must never select a KMI.
-UNPACKAGED = ("6.6.118-android14-1-test", "6.6.118-vendor", "5.4.0-android12-1-test",
+# Releases that must never select a KMI: an (os, kver) pair upstream does not ship, a tag
+# that names the wrong os for a packaged kver, or a tag-less version that two KMIs share.
+UNPACKAGED = ("6.6.118-android14-1-test", "5.4.0-android12-1-test",
               "3.18.0-android10-1-test", "6.10.0-android14-1-test",
-              "5.109.0-android12-1-test")
+              "5.109.0-android12-1-test", "5.10.200-custom", "5.15.148-custom",
+              "4.19.0-custom")
+# Tag-less custom kernels: osrelease keeps the GKI version but drops the Android tag, so the
+# strict match misses. They resolve by version alone, but only when it maps to one packaged
+# KMI. 6.6.50-mainline is the documented tradeoff: version-only cannot tell it from GKI 6.6.
+TAGLESS = {"6.1.176-Radioactive-V1.3-+": "android14-6.1", "6.6.118-vendor": "android15-6.6",
+           "6.12.9-custom": "android16-6.12", "6.18.2-custom": "android17-6.18",
+           "6.6.50-mainline": "android15-6.6"}
 # Releases that mention a packaged (os, kver) but in a non-canonical shape: the Android
 # tag must directly follow a numeric patch level. Guessing here would load a binary whose
 # real ABI is unknown, so these must be refused like any other unrecognized release.
@@ -88,6 +96,13 @@ class LoaderTests(unittest.TestCase):
             with self.subTest(kernel=kernel):
                 self.assertEqual(self.run_loader(10, kernel=kernel), (1, False))
 
+    def test_tagless_version_falls_back_only_when_unambiguous(self):
+        # No Android tag and the version maps to a single packaged KMI: load it.
+        for kernel, kmi in TAGLESS.items():
+            with self.subTest(kernel=kernel):
+                self.assertEqual(self.run_loader(10, kernel=kernel, after=0, expect_kmi=kmi),
+                                 (0, True))
+
     def test_canonical_shapes_still_select(self):
         # The KMI generation suffix is optional; only a wrong <os>/<kver> pair refuses.
         for kmi in KMIS.values():
@@ -108,7 +123,8 @@ class LoaderTests(unittest.TestCase):
         self.assertEqual(self.run_loader(10, loader_result=7), (7, True))
 
     def test_install_selection_and_rejection(self):
-        for kernel in (*KMIS, *UNPACKAGED, *MANGLED):
+        accepted = {*KMIS, *TAGLESS}
+        for kernel in (*KMIS, *TAGLESS, *UNPACKAGED, *MANGLED):
             with self.subTest(kernel=kernel), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 shutil.copytree(ROOT / "module", root / "module")
@@ -123,8 +139,8 @@ class LoaderTests(unittest.TestCase):
                            '. "$MODPATH/customize.sh"\n')
                 result = subprocess.run(["sh", "-c", harness], capture_output=True,
                                         env={**os.environ, "KSU": "true", "ARCH": "arm64", "MODPATH": str(mod)})
-                self.assertEqual(result.returncode, 0 if kernel in KMIS else 1)
-                self.assertEqual((mod / "skip_mount").exists(), kernel in KMIS)
+                self.assertEqual(result.returncode, 0 if kernel in accepted else 1)
+                self.assertEqual((mod / "skip_mount").exists(), kernel in accepted)
 
 
 if __name__ == "__main__":

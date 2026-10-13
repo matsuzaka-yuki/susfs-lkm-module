@@ -33,13 +33,19 @@ select_kmi() {
       "$os" | "$os"-*) echo "$kmi"; return 0 ;;
     esac
   done < "$2/kmis"
-  # Fallback for a custom kernel that keeps the GKI version but drops the Android tag
-  # from osrelease (e.g. 6.1.176-Radioactive-V1.3-+): the match above finds nothing.
-  # Match on the kernel version alone, keeping the numeric-patch guard, and only when
-  # that version maps to a single packaged KMI. A KMI is ABI-stable across all of its
-  # patch levels, so when the version is unambiguous the .ko cannot be a wrong pick;
-  # the vermagic worry only applies to versions shared by two KMIs (5.10, 5.15), and
-  # those are refused here rather than guessed.
+  # Fallback for a custom kernel that keeps the GKI version but carries no Android tag in
+  # osrelease (e.g. 6.1.176-Radioactive-V1.3-+): the strict match above finds nothing.
+  # Only a release with NO Android tag at all may take this path. A tag that is present but
+  # did not match the strict shape is a real mismatch (e.g. 6.6.118-android14-1-test on a 6.6
+  # kernel, whose only packaged KMI is android15-6.6), and overriding it by version alone
+  # would load a binary the release explicitly disowns.
+  case "$rel" in *android[0-9]*) return 1 ;; esac
+  # Match on the kernel version alone, keeping the numeric-patch guard, and only when that
+  # version maps to a single packaged KMI: a KMI is ABI-stable across all of its patch
+  # levels, so an unambiguous version cannot be a wrong pick, while a version shared by two
+  # KMIs (5.10, 5.15) is refused rather than guessed. Accepted tradeoff: version-only
+  # matching cannot tell a GKI 6.6 from a mainline 6.6, so a tag-less 6.6.50 maps to
+  # android15-6.6.
   match=""
   n=0
   while IFS= read -r kmi; do
